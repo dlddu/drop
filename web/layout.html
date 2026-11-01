@@ -41,14 +41,15 @@
 </form>
 <section id="result" class="card result" hidden>
   <h2>보관함이 만들어졌어요</h2>
-  <p>받는 사람에게 아래 정보를 전달하세요.</p>
+  <p>받는 사람에게 링크와 비밀번호를 전달하세요. 링크를 열면 비밀번호만 입력하면 돼요.</p>
   <dl>
     <dt>주소</dt><dd><code id="r-url"></code></dd>
     <dt>아이디</dt><dd><code id="r-id"></code></dd>
     <dt>비밀번호</dt><dd><code id="r-pw"></code></dd>
     <dt>보관 기한</dt><dd id="r-exp"></dd>
   </dl>
-  <button type="button" id="r-copy">전달용 문구 복사</button>
+  <button type="button" id="r-copy" class="primary">전달용 문구 복사</button>
+  <button type="button" id="r-link-copy">링크만 복사</button>
   <button type="button" id="r-again" class="ghost">또 올리기</button>
 </section>
 {{end}}

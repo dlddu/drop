@@ -54,6 +54,12 @@ const pendingTTL = 24 * time.Hour
 
 var idRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{2,39}$`)
 
+// reservedIDs 는 공유 주소(/{id})와 겹치는 고정 경로라 아이디로 쓸 수 없다.
+// 경로를 새로 만들면 여기에도 넣는다(flux-cd-apps 의 공개 라우트 정규식과 함께).
+var reservedIDs = map[string]bool{"admin": true, "api": true, "get": true, "static": true, "healthz": true}
+
+func reservedID(id string) bool { return reservedIDs[id] }
+
 type FileMeta struct {
 	Name string `json:"name"`
 	Size int64  `json:"size"`
@@ -285,6 +291,9 @@ func (s *Store) CreatePending(req CreateRequest, by Creator, lim Limits, now tim
 	id := strings.ToLower(strings.TrimSpace(req.ID))
 	if id != "" && !idRe.MatchString(id) {
 		return nil, "", "", invalid("아이디는 영문 소문자·숫자·하이픈 3~40자입니다")
+	}
+	if reservedID(id) {
+		return nil, "", "", invalid("%q 는 쓸 수 없는 아이디입니다", id)
 	}
 	password = strings.TrimSpace(req.Password)
 	if password == "" {
@@ -586,6 +595,8 @@ type TokenRequest struct {
 	ValidHours int    `json:"valid_hours"` // link: 필수, apikey: 0 = 만료 없음
 	MaxUses    int    `json:"max_uses"`    // link 전용
 	MaxDays    int    `json:"max_days"`
+	// validFor 는 서비스 계정 교환이 쓰는 분 단위 만료다(관리 API 로는 받지 않는다). 있으면 ValidHours 대신 쓴다.
+	validFor time.Duration
 }
 
 // CreateToken 은 원문을 한 번만 돌려준다.
@@ -621,7 +632,11 @@ func (s *Store) CreateToken(req TokenRequest, createdBy string, globalMaxDays in
 	default:
 		return nil, "", invalid("kind 는 link 또는 apikey 입니다")
 	}
-	if req.ValidHours > 0 {
+	switch {
+	case req.validFor > 0:
+		exp := now.Add(req.validFor)
+		t.ExpiresAt = &exp
+	case req.ValidHours > 0:
 		exp := now.Add(time.Duration(req.ValidHours) * time.Hour)
 		t.ExpiresAt = &exp
 	}

@@ -39,6 +39,8 @@ type Server struct {
 	tmpl    *template.Template
 	mux     *http.ServeMux
 	now     func() time.Time
+	// reviewer 는 SA_ALLOW 가 있고 파드 안일 때만 있다. 없으면 서비스 계정 교환은 503.
+	reviewer TokenReviewer
 }
 
 type Principal struct {
@@ -75,6 +77,11 @@ func NewServer(cfg Config, st *Store) (*Server, error) {
 		mux:     http.NewServeMux(),
 		now:     time.Now,
 	}
+	if len(cfg.SAAllow) > 0 {
+		if s.reviewer, err = newInClusterReviewer(); err != nil {
+			return nil, err
+		}
+	}
 	s.routes()
 	return s, nil
 }
@@ -93,7 +100,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) routes() {
 	m := s.mux
 	static, _ := fs.Sub(webFS, "web/static")
-	m.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
+	// 한 단계 경로만 둔다 — 공유 주소 /{id} 와 패턴 모양을 맞춘다.
+	m.Handle("GET /static/{file}", http.StripPrefix("/static/", http.FileServerFS(static)))
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") })
 	m.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/get", http.StatusFound) })
 
@@ -101,6 +109,11 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /get", s.getForm)
 	m.HandleFunc("POST /get", s.getLogin)
 	m.HandleFunc("GET /get/{id}", s.getDrop)
+
+	// 공유 주소 /{id}: 아이디가 채워진 받기 화면(이미 열었으면 목록). 비밀번호는 주소에 넣지 않는다 —
+	// 링크가 로그·기록에 남아도 그것만으로는 열리지 않게(받는 사람이 화면에서 입력, 2026-11-01 결정).
+	// 예약어(admin·api·get·static·healthz)는 아이디로 쓸 수 없으므로 위의 고정 경로와 겹치지 않는다.
+	m.HandleFunc("GET /{id}", s.shortDrop)
 	m.HandleFunc("GET /get/{id}/f/{n}", s.getFile)
 	m.HandleFunc("GET /get/{id}/all.zip", s.getZip)
 
@@ -116,6 +129,10 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/v1/drops", s.withAuth(s.apiPrincipal, false, s.apiSimpleUpload))
 	m.HandleFunc("GET /api/v1/drops", s.withAuth(s.apiPrincipal, false, s.apiListOwn))
 	m.HandleFunc("DELETE /api/v1/drops/{id}", s.withAuth(s.apiPrincipal, false, s.apiDeleteOwn))
+
+	// 클러스터 안 서비스 계정 → 단기 API 키. 공개 라우트에서는 Traefik 이 이 경로를 막는다
+	// (flux-cd-apps/apps/drop) — 클러스터 안 이름(drop-external)으로만 닿는다.
+	m.HandleFunc("POST /api/v1/sa/token", s.saExchange)
 
 	// 관리자
 	m.HandleFunc("GET /admin", s.adminPage)
@@ -571,13 +588,34 @@ func (s *Server) getLogin(w http.ResponseWriter, r *http.Request) {
 		s.page(w, status, "get.html", map[string]any{"Title": "파일 받기", "ID": id, "Error": msg})
 		return
 	}
+	s.grant(w, r, d)
+	http.Redirect(w, r, "/"+d.ID, http.StatusSeeOther)
+}
+
+// grant 는 받기 쿠키를 준다. 쿠키는 아이디마다 이름이 다르고 경로는 / 다 — 공유 주소(/{id})와
+// 파일 주소(/get/{id}/f/{n}) 양쪽에 실려야 한다.
+func (s *Server) grant(w http.ResponseWriter, r *http.Request, d *Drop) {
 	exp := s.now().Add(grantTTL)
 	http.SetCookie(w, &http.Cookie{
-		Name: grantCookieName(d.ID), Value: signGrant(s.secret, d, exp), Path: "/get/" + d.ID,
+		Name: grantCookieName(d.ID), Value: signGrant(s.secret, d, exp), Path: "/",
 		Expires: exp, HttpOnly: true, Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
 		SameSite: http.SameSiteLaxMode,
 	})
-	http.Redirect(w, r, "/get/"+d.ID, http.StatusSeeOther)
+}
+
+func (s *Server) shortDrop(w http.ResponseWriter, r *http.Request) {
+	id := strings.ToLower(r.PathValue("id"))
+	if !idRe.MatchString(id) || reservedID(id) {
+		s.page(w, http.StatusNotFound, "error.html", map[string]any{"Title": "찾을 수 없음", "Message": "없는 주소입니다."})
+		return
+	}
+	if d, err := s.store.Get(id, s.now()); err == nil {
+		if c, cerr := r.Cookie(grantCookieName(id)); cerr == nil && verifyGrant(s.secret, d, c.Value, s.now()) {
+			s.page(w, http.StatusOK, "files.html", map[string]any{"Title": d.ID, "Drop": d})
+			return
+		}
+	}
+	s.page(w, http.StatusOK, "get.html", map[string]any{"Title": "파일 받기", "ID": id})
 }
 
 // authorize 는 아이디·비밀번호를 확인한다. 실패 메시지는 아이디가 있는지 드러내지 않는다.
@@ -627,8 +665,15 @@ func (s *Server) getDrop(w http.ResponseWriter, r *http.Request) {
 	d, ok := s.grantedDrop(w, r)
 	if !ok {
 		if r.Header.Get("Authorization") == "" {
-			http.Redirect(w, r, "/get?id="+url.QueryEscape(r.PathValue("id")), http.StatusSeeOther)
+			http.Redirect(w, r, "/"+url.PathEscape(strings.ToLower(r.PathValue("id"))), http.StatusSeeOther)
 		}
+		return
+	}
+	// 스크립트·도구용: 파일 목록만 JSON 으로(내용은 /f/{n} 으로 따로 받는다).
+	if strings.Contains(r.Header.Get("Accept"), "application/json") {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id": d.ID, "files": d.Files, "bytes": d.TotalSize(), "expires_at": d.ExpiresAt,
+		})
 		return
 	}
 	s.page(w, http.StatusOK, "files.html", map[string]any{"Title": d.ID, "Drop": d})
@@ -698,7 +743,7 @@ func (s *Server) getZip(w http.ResponseWriter, r *http.Request) {
 type DropView struct {
 	ID        string     `json:"id"`
 	Password  string     `json:"password,omitempty"`
-	URL       string     `json:"url"`
+	URL       string     `json:"url"` // 공유 주소: <base>/<id> (비밀번호는 받는 사람이 화면에서 입력)
 	Files     []FileMeta `json:"files"`
 	Bytes     int64      `json:"bytes"`
 	CreatedAt time.Time  `json:"created_at"`
@@ -711,13 +756,18 @@ type DropView struct {
 
 func dropView(d *Drop, base string) DropView {
 	return DropView{
-		ID: d.ID, URL: base + "/get?id=" + url.QueryEscape(d.ID), Files: d.Files, Bytes: d.TotalSize(),
+		ID: d.ID, URL: base + "/" + d.ID, Files: d.Files, Bytes: d.TotalSize(),
 		CreatedAt: d.CreatedAt, ExpiresAt: d.ExpiresAt, CreatedBy: d.CreatedBy, Via: d.Via,
 		Pending: d.Pending, Downloads: d.Downloads,
 	}
 }
 
+// baseURL 은 사용자에게 보여줄 주소다. 클러스터 안에서 내부 이름으로 들어온 요청에도 공개 주소를
+// 돌려주도록 PUBLIC_BASE_URL 이 있으면 그것을 쓴다.
 func (s *Server) baseURL(r *http.Request) string {
+	if s.cfg.PublicBaseURL != "" {
+		return s.cfg.PublicBaseURL
+	}
 	scheme := "http"
 	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
 		scheme = "https"

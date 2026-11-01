@@ -8,7 +8,27 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - ../../base
+  # 서비스 계정 교환 검증용: drop 의 TokenReview 권한과, 허용 목록에 넣는 호출자 SA.
+  - e2e-rbac.yaml
 patches:
+  - target:
+      kind: Deployment
+      name: drop
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: drop
+      spec:
+        template:
+          spec:
+            containers:
+              - name: drop
+                env:
+                  - name: SA_ALLOW
+                    value: default/e2e-caller
+                  - name: PUBLIC_BASE_URL
+                    value: https://drop.e2e.invalid
   # kind 노드에 load 된 이미지를 쓰게 한다. 레지스트리 인증을 노드에 주지 않기 위해서다.
   - target:
       kind: Deployment
