@@ -25,7 +25,7 @@ spec:
           containers:
             - name: cleanup
               # 태그는 pin 이 deployment.yaml 과 함께 같은 SHA 로 고친다.
-              image: ghcr.io/dlddu/drop:bootstrap
+              image: ghcr.io/dlddu/drop:53f27db69331fb9f4b973e86b98a4775a337e253
               args: ["cleanup"]
               env:
                 - name: DATA_DIR
