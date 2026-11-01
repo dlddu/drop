@@ -149,9 +149,9 @@ jobs:
           UP=$(curl -fsS -H "Authorization: Bearer $KEY" -F days=2 -F file=@/tmp/sa.txt "$B/api/v1/drops")
           ID=$(echo "$UP" | jq -r .id); PW=$(echo "$UP" | jq -r .password)
           test "$(echo "$UP" | jq -r .url)" = "https://drop.e2e.invalid/$ID"
-          test "$(echo "$UP" | jq -r .share_url)" = "https://drop.e2e.invalid/$ID/$PW"
-          # 공유 링크(/{id}/{password})는 쿠키를 주고 /{id} 로 보낸다
-          test "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$B/$ID/$PW")" = "303 $B/$ID"
+          # 공유 주소 /{id} 는 아이디가 채워진 받기 화면이고, 비밀번호를 경로에 넣는 주소는 없다
+          curl -fsS "$B/$ID" | grep -q "value=\"$ID\""
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$B/$ID/$PW")" = 404
           curl -fsS -u "$ID:$PW" -H 'Accept: application/json' "$B/get/$ID" | jq -e '.files[0].name == "sa.txt"'
           curl -fsS -u "$ID:$PW" -o /tmp/sa.got "$B/get/$ID/f/0" && cmp /tmp/sa.txt /tmp/sa.got
 

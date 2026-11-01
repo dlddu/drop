@@ -104,11 +104,9 @@
     form.hidden = true;
     const out = $('result'); out.hidden = false;
     const exp = new Date(v.expires_at).toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' });
-    const share = `${v.url}/${encodeURIComponent(pw)}`;
-    $('r-share').textContent = share;
     $('r-url').textContent = v.url; $('r-id').textContent = v.id; $('r-pw').textContent = pw; $('r-exp').textContent = exp;
-    $('r-share-copy').onclick = () => {
-      navigator.clipboard.writeText(share).then(() => { $('r-share-copy').textContent = '복사했어요'; });
+    $('r-link-copy').onclick = () => {
+      navigator.clipboard.writeText(v.url).then(() => { $('r-link-copy').textContent = '복사했어요'; });
     };
     $('r-copy').onclick = () => {
       const text = `파일 받는 곳: ${v.url}\n아이디: ${v.id}\n비밀번호: ${pw}\n(${exp}까지)`;
@@ -116,8 +114,8 @@
     };
     $('r-again').onclick = () => {
       out.hidden = true; form.hidden = false; form.reset(); setFiles([]);
-      progress.hidden = true; bar.style.width = '0'; $('r-copy').textContent = '아이디·비밀번호 따로 복사';
-      $('r-share-copy').textContent = '링크 복사';
+      progress.hidden = true; bar.style.width = '0'; $('r-copy').textContent = '전달용 문구 복사';
+      $('r-link-copy').textContent = '링크만 복사';
     };
   }
 })();

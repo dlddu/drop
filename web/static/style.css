@@ -76,5 +76,3 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
   .card { padding: 16px; }
   h1 { font-size: 22px; }
 }
-.share { margin: 12px 0; padding: 12px; background: var(--soft); border-radius: 8px; }
-.share code { font-size: 16px; }

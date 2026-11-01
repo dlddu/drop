@@ -100,7 +100,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) routes() {
 	m := s.mux
 	static, _ := fs.Sub(webFS, "web/static")
-	// 한 단계 경로만 둔다 — 공유 링크 /{id}/{password} 와 겹치지 않게(더 구체적인 패턴이 이긴다).
+	// 한 단계 경로만 둔다 — 공유 주소 /{id} 와 패턴 모양을 맞춘다.
 	m.Handle("GET /static/{file}", http.StripPrefix("/static/", http.FileServerFS(static)))
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") })
 	m.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/get", http.StatusFound) })
@@ -110,11 +110,10 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /get", s.getLogin)
 	m.HandleFunc("GET /get/{id}", s.getDrop)
 
-	// 공유 링크: /{id} 는 아이디가 채워진 받기 화면(또는 이미 열었으면 목록),
-	// /{id}/{password} 는 확인 후 쿠키를 주고 /{id} 로 보낸다(주소창에서 비밀번호를 걷어 낸다).
+	// 공유 주소 /{id}: 아이디가 채워진 받기 화면(이미 열었으면 목록). 비밀번호는 주소에 넣지 않는다 —
+	// 링크가 로그·기록에 남아도 그것만으로는 열리지 않게(받는 사람이 화면에서 입력, 2026-11-01 결정).
 	// 예약어(admin·api·get·static·healthz)는 아이디로 쓸 수 없으므로 위의 고정 경로와 겹치지 않는다.
 	m.HandleFunc("GET /{id}", s.shortDrop)
-	m.HandleFunc("GET /{id}/{pw}", s.shortLogin)
 	m.HandleFunc("GET /get/{id}/f/{n}", s.getFile)
 	m.HandleFunc("GET /get/{id}/all.zip", s.getZip)
 
@@ -423,7 +422,6 @@ func (s *Server) apiSimpleUpload(w http.ResponseWriter, r *http.Request, p *Prin
 	}
 	v := dropView(d, s.baseURL(r))
 	v.Password = pw
-	v.ShareURL = shareURL(v.URL, pw)
 	writeJSON(w, http.StatusCreated, v)
 }
 
@@ -620,23 +618,6 @@ func (s *Server) shortDrop(w http.ResponseWriter, r *http.Request) {
 	s.page(w, http.StatusOK, "get.html", map[string]any{"Title": "파일 받기", "ID": id})
 }
 
-// shortLogin 은 /{id}/{password} 공유 링크다. 맞으면 쿠키를 주고 /{id} 로 보낸다.
-// 틀리면 아이디만 채운 폼을 보여 준다 — 시도 제한은 폼과 같다.
-func (s *Server) shortLogin(w http.ResponseWriter, r *http.Request) {
-	id := strings.ToLower(r.PathValue("id"))
-	if !idRe.MatchString(id) || reservedID(id) {
-		s.page(w, http.StatusNotFound, "error.html", map[string]any{"Title": "찾을 수 없음", "Message": "없는 주소입니다."})
-		return
-	}
-	d, status, msg := s.authorize(r, id, r.PathValue("pw"))
-	if d == nil {
-		s.page(w, status, "get.html", map[string]any{"Title": "파일 받기", "ID": id, "Error": msg})
-		return
-	}
-	s.grant(w, r, d)
-	http.Redirect(w, r, "/"+d.ID, http.StatusSeeOther)
-}
-
 // authorize 는 아이디·비밀번호를 확인한다. 실패 메시지는 아이디가 있는지 드러내지 않는다.
 func (s *Server) authorize(r *http.Request, id, pw string) (*Drop, int, string) {
 	now := s.now()
@@ -762,8 +743,7 @@ func (s *Server) getZip(w http.ResponseWriter, r *http.Request) {
 type DropView struct {
 	ID        string     `json:"id"`
 	Password  string     `json:"password,omitempty"`
-	URL       string     `json:"url"`                 // 공유 주소: <base>/<id> (받는 사람이 비밀번호 입력)
-	ShareURL  string     `json:"share_url,omitempty"` // 비밀번호까지 담은 링크: <base>/<id>/<password>
+	URL       string     `json:"url"` // 공유 주소: <base>/<id> (비밀번호는 받는 사람이 화면에서 입력)
 	Files     []FileMeta `json:"files"`
 	Bytes     int64      `json:"bytes"`
 	CreatedAt time.Time  `json:"created_at"`
@@ -784,9 +764,6 @@ func dropView(d *Drop, base string) DropView {
 
 // baseURL 은 사용자에게 보여줄 주소다. 클러스터 안에서 내부 이름으로 들어온 요청에도 공개 주소를
 // 돌려주도록 PUBLIC_BASE_URL 이 있으면 그것을 쓴다.
-// shareURL 은 비밀번호까지 담은 공유 링크다. 비밀번호는 경로 한 칸으로 들어가므로 이스케이프한다.
-func shareURL(dropURL, password string) string { return dropURL + "/" + url.PathEscape(password) }
-
 func (s *Server) baseURL(r *http.Request) string {
 	if s.cfg.PublicBaseURL != "" {
 		return s.cfg.PublicBaseURL
