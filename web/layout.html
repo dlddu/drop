@@ -41,14 +41,17 @@
 </form>
 <section id="result" class="card result" hidden>
   <h2>보관함이 만들어졌어요</h2>
-  <p>받는 사람에게 아래 정보를 전달하세요.</p>
+  <p>이 링크만 보내면 받는 사람이 바로 열 수 있어요.</p>
+  <p class="share"><code id="r-share"></code></p>
+  <button type="button" id="r-share-copy" class="primary">링크 복사</button>
+  <p class="muted">비밀번호를 따로 보내고 싶으면 아래 주소와 비밀번호를 나눠 전달하세요.</p>
   <dl>
     <dt>주소</dt><dd><code id="r-url"></code></dd>
     <dt>아이디</dt><dd><code id="r-id"></code></dd>
     <dt>비밀번호</dt><dd><code id="r-pw"></code></dd>
     <dt>보관 기한</dt><dd id="r-exp"></dd>
   </dl>
-  <button type="button" id="r-copy">전달용 문구 복사</button>
+  <button type="button" id="r-copy">아이디·비밀번호 따로 복사</button>
   <button type="button" id="r-again" class="ghost">또 올리기</button>
 </section>
 {{end}}
