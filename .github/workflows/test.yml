@@ -1,0 +1,137 @@
+# pr.yml 에서만 호출된다(단독 트리거 없음). 트리거와 단일 필수 체크(`pr-gate`)는 pr.yml 에 있다.
+#
+# `sha` 는 PR head SHA 다. image.yml 이 이미 이 태그로 이미지를 발행했고, e2e 는 그것을
+# pull 해 kind 에 올린다 — 여기서 다시 빌드하지 않는다.
+name: Test
+
+on:
+  workflow_call:
+    inputs:
+      sha:
+        description: 테스트할 커밋이자 이미지 태그(PR head SHA)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  unit:
+    name: unit
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test -race -count=1 ./...
+
+  # ── kind e2e ─────────────────────────────────────────────────────────────
+  # 발행된 이미지로 deploy/overlays/e2e 를 올리고 기동·헬스체크까지 본다(스모크).
+  # 기능 e2e 는 아래 TODO 자리에 붙인다.
+  e2e:
+    name: e2e (kind)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    env:
+      SHA: ${{ inputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: e2e
+
+      # 노드가 ghcr 에서 직접 pull 하지 않는다: 러너가 받아서 `kind load` 한다. 그래야 노드에
+      # 레지스트리 자격증명을 줄 필요가 없고, 비공개 패키지도 같은 경로로 동작한다.
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull published images and load into kind
+        run: |
+          set -euo pipefail
+          docker pull "ghcr.io/dlddu/drop:${SHA}"
+          kind load docker-image "ghcr.io/dlddu/drop:${SHA}" --name e2e
+
+      # 이름은 그대로 두고 태그만 PR head SHA 로 바꾼다(overlay 파일 끝에 덧붙임 — 러너의
+      # 일회성 체크아웃이라 커밋되지 않는다).
+      - name: Point the e2e overlay at this PR's images
+        run: |
+          cat >> deploy/overlays/e2e/kustomization.yaml <<EOF
+          images:
+            - name: ghcr.io/dlddu/drop
+              newTag: "${SHA}"
+          EOF
+          kubectl kustomize deploy/overlays/e2e | grep -E 'image:'
+
+      - name: Deploy
+        run: |
+          kubectl apply -k deploy/overlays/e2e
+          kubectl rollout status deploy/drop --timeout=180s
+
+      - name: Smoke — health endpoint
+        run: |
+          set -euo pipefail
+          kubectl port-forward svc/drop 18080:80 >/tmp/pf.log 2>&1 &
+          trap 'kill %1 2>/dev/null || true' EXIT
+          curl -fsS --retry 15 --retry-delay 2 --retry-all-errors \
+            "http://127.0.0.1:18080/healthz"
+
+      # 운영과 같은 이미지로 올리기 → 받기 → 정리 Job 까지 한 바퀴. 관리자 경로는 Traefik 의
+      # forward-auth 가 넣는 Remote-User 헤더를 직접 붙여 흉내 낸다(클러스터 Service 직결).
+      - name: Functional — upload, download, cleanup job
+        run: |
+          set -euo pipefail
+          kubectl port-forward svc/drop 18080:80 >/tmp/pf.log 2>&1 &
+          trap 'kill %1 2>/dev/null || true' EXIT
+          B=http://127.0.0.1:18080
+          curl -fsS --retry 15 --retry-delay 2 --retry-all-errors "$B/healthz" >/dev/null
+          A=(-H 'Remote-User: e2e' -H 'X-Drop: 1')
+
+          head -c 3000000 /dev/urandom > /tmp/blob
+          SIZE=$(stat -c %s /tmp/blob)
+          INIT=$(curl -fsS "${A[@]}" -H 'Content-Type: application/json' \
+            -d "{\"files\":[{\"name\":\"blob.bin\",\"size\":$SIZE}],\"id\":\"e2e-drop\",\"password\":\"e2e-secret\",\"days\":1}" \
+            "$B/admin/api/uploads")
+          KEY=$(echo "$INIT" | jq -r .upload_key)
+          # 1MB 조각 3개
+          split -b 1000000 -d /tmp/blob /tmp/part.
+          OFF=0
+          for p in /tmp/part.*; do
+            curl -fsS "${A[@]}" -X PUT --data-binary "@$p" -H 'Content-Type: application/octet-stream' \
+              "$B/admin/api/uploads/e2e-drop/$KEY/files/0?offset=$OFF" >/dev/null
+            OFF=$((OFF + $(stat -c %s "$p")))
+          done
+          curl -fsS "${A[@]}" -X POST "$B/admin/api/uploads/e2e-drop/$KEY/complete" | jq .
+
+          curl -fsS -u e2e-drop:e2e-secret -o /tmp/got "$B/get/e2e-drop/f/0"
+          cmp /tmp/blob /tmp/got
+          test "$(curl -s -o /dev/null -w '%{http_code}' -u e2e-drop:wrong "$B/get/e2e-drop/f/0")" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$B/admin/api/drops")" = 401
+
+          kubectl create job e2e-cleanup --from=cronjob/drop-cleanup
+          kubectl wait --for=condition=complete job/e2e-cleanup --timeout=120s
+          kubectl logs job/e2e-cleanup
+
+      - name: Dump cluster diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get all -o wide || true
+          kubectl describe deploy/drop || true
+          kubectl logs deploy/drop --tail=200 || true
+          kubectl get events --sort-by=.lastTimestamp | tail -50 || true

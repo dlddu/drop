@@ -1,0 +1,12 @@
+{{template "head" .}}
+<section class="card narrow">
+  <h1>파일 받기</h1>
+  <p class="muted">전달받은 아이디와 비밀번호를 입력하세요.</p>
+  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+  <form method="post" action="/get" class="stack">
+    <label>아이디<input name="id" value="{{.ID}}" required autocomplete="username" autocapitalize="none" spellcheck="false" {{if not .ID}}autofocus{{end}}></label>
+    <label>비밀번호<input name="password" type="password" required autocomplete="current-password" {{if .ID}}autofocus{{end}}></label>
+    <button class="primary" type="submit">열기</button>
+  </form>
+</section>
+{{template "foot" .}}

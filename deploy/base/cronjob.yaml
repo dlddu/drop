@@ -1,0 +1,50 @@
+# 만료된 보관함을 디스크에서 지운다. 웹 파드도 깨어 있는 동안 10분마다 정리하지만, Sablier 로
+# 잠들어 있는 동안에는 아무도 지우지 않으므로 매일 한 번 이 Job 이 맡는다(만료된 보관함은 디스크에
+# 남아 있어도 받기에서는 이미 보이지 않는다). EFS 는 RWX 라 웹 파드와 동시에 붙어도 된다.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: drop-cleanup
+spec:
+  schedule: "17 19 * * *" # 매일 04:17 KST
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: cleanup
+              # 태그는 pin 이 deployment.yaml 과 함께 같은 SHA 로 고친다.
+              image: ghcr.io/dlddu/drop:bootstrap
+              args: ["cleanup"]
+              env:
+                - name: DATA_DIR
+                  value: /data
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  memory: 64Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+          # overlays/prod 가 인덱스 0 을 PVC 로 바꾼다(deployment.yaml 과 같은 seam).
+          volumes:
+            - name: data
+              emptyDir: {}

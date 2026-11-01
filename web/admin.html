@@ -1,0 +1,60 @@
+{{template "head" .}}
+<div class="admin-head"><h1>drop 관리</h1><span class="muted">{{.User}}</span></div>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" data-tab="t-upload" aria-selected="true">올리기</button>
+  <button role="tab" data-tab="t-drops">보관함</button>
+  <button role="tab" data-tab="t-tokens">링크·API 키</button>
+</nav>
+
+<section id="t-upload" class="tab">
+  {{template "uploader" .Upload}}
+</section>
+
+<section id="t-drops" class="tab" hidden>
+  <div class="card">
+    <p class="muted" id="usage"></p>
+    <table class="list"><thead><tr><th>아이디</th><th>파일</th><th>기한</th><th>올린 곳</th><th>받음</th><th></th></tr></thead>
+    <tbody id="drops"></tbody></table>
+  </div>
+</section>
+
+<section id="t-tokens" class="tab" hidden>
+  <div class="grid2">
+    <form class="card stack" id="new-link">
+      <h2>임시 업로드 링크</h2>
+      <p class="muted">로그인 없이 누구나 이 링크로 파일을 올릴 수 있어요.</p>
+      <label>이름<input name="label" placeholder="예: 김OO 서류 받기"></label>
+      <div class="row">
+        <label>유효 시간<select name="valid_hours"><option value="1">1시간</option><option value="24" selected>1일</option><option value="72">3일</option><option value="168">7일</option></select></label>
+        <label>사용 횟수<input name="max_uses" type="number" min="1" max="1000" value="1"></label>
+        <label>최대 보관<input name="max_days" type="number" min="1" max="30" value="7"></label>
+      </div>
+      <button class="primary" type="submit">링크 만들기</button>
+    </form>
+    <form class="card stack" id="new-key">
+      <h2>서비스 계정 API 키</h2>
+      <p class="muted">스크립트·다른 서비스가 <code>Authorization: Bearer</code>로 올릴 때 씁니다.</p>
+      <label>이름<input name="label" placeholder="예: backup-job" required></label>
+      <div class="row">
+        <label>유효 기간<select name="valid_hours"><option value="0" selected>무기한</option><option value="720">30일</option><option value="2160">90일</option><option value="8760">1년</option></select></label>
+        <label>최대 보관<input name="max_days" type="number" min="1" max="30" value="30"></label>
+      </div>
+      <button class="primary" type="submit">키 만들기</button>
+    </form>
+  </div>
+  <div class="card secret" id="secret" hidden>
+    <strong id="secret-title"></strong>
+    <p class="muted">지금만 보여요. 닫으면 다시 볼 수 없습니다.</p>
+    <code id="secret-value"></code>
+    <button type="button" id="secret-copy">복사</button>
+  </div>
+  <div class="card">
+    <table class="list"><thead><tr><th>이름</th><th>종류</th><th>사용</th><th>만료</th><th>상태</th><th></th></tr></thead>
+    <tbody id="tokens"></tbody></table>
+  </div>
+</section>
+
+<script src="/static/upload.js"></script>
+<script src="/static/admin.js"></script>
+{{template "foot" .}}

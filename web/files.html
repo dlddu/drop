@@ -1,0 +1,12 @@
+{{template "head" .}}
+<section class="card">
+  <h1>{{.Drop.ID}}</h1>
+  <p class="muted">{{date .Drop.ExpiresAt}}까지 받을 수 있습니다 · {{len .Drop.Files}}개 · {{bytes .Drop.TotalSize}}</p>
+  <ul class="files">
+    {{range $i, $f := .Drop.Files}}
+    <li><a href="/get/{{$.Drop.ID}}/f/{{$i}}" download>{{$f.Name}}</a><span class="muted">{{bytes $f.Size}}</span></li>
+    {{end}}
+  </ul>
+  {{if gt (len .Drop.Files) 1}}<a class="button primary" href="/get/{{.Drop.ID}}/all.zip" download>전부 받기 (zip)</a>{{end}}
+</section>
+{{template "foot" .}}
