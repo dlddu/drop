@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drop
+spec:
+  replicas: 1
+  # 쓰기 프로세스는 하나여야 한다(메타데이터를 파일로 직접 고친다) — 겹치는 롤링 업데이트 금지.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {}
+  template:
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        # distroless:nonroot(65532) 이미지.
+        runAsNonRoot: true
+      containers:
+        - name: drop
+          # 태그의 단일 출처. main push 마다 CI 의 `pin` job 이 deploy 브랜치에서 이 자리를
+          # 커밋 SHA 로 고친다 — main 에 남는 값(`bootstrap` 포함)은 운영과 무관하다.
+          # 태그가 불변이므로 imagePullPolicy 는 기본값(IfNotPresent)이 옳다.
+          image: ghcr.io/dlddu/drop:bootstrap
+          env:
+            - name: DATA_DIR
+              value: /data
+            - name: MAX_FILE_BYTES
+              value: 2GiB
+            # PVC 는 20Gi 지만 EFS 는 크기를 강제하지 않으므로 앱이 지킨다.
+            - name: MAX_TOTAL_BYTES
+              value: 20GiB
+            - name: MAX_DAYS
+              value: "30"
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      # emptyDir 는 seam 이다: overlays/prod 가 PVC 로 바꾸고, e2e 는 그대로 둔다.
+      # 인덱스 0 을 overlays/prod 의 patch 가 잡고 있으니 볼륨 순서를 바꾸면 함께 고칠 것.
+      volumes:
+        - name: data
+          emptyDir: {}

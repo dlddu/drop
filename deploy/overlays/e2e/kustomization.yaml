@@ -1,0 +1,25 @@
+# kind e2e overlay. CI(.github/workflows/test.yml)가 PR 에서 발행된 이미지를 pull → `kind load`
+# 한 뒤, 실행 시점에 이 파일 끝에 `images:` 를 덧붙여 PR head SHA 로 retag 하고 적용한다.
+# 이름을 바꾸지 않으므로 운영에 배포될 바로 그 이미지를 테스트한다.
+#
+# 로컬에서 돌릴 때: 같은 방식으로 images 를 덧붙이거나
+#   kubectl kustomize deploy/overlays/e2e | sed 's#:bootstrap#:<sha>#' | kubectl apply -f -
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  # kind 노드에 load 된 이미지를 쓰게 한다. 레지스트리 인증을 노드에 주지 않기 위해서다.
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+  - target:
+      kind: CronJob
+    patch: |-
+      - op: add
+        path: /spec/jobTemplate/spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+# (CI 가 여기에 images: 를 덧붙인다 — 이 줄 아래에 다른 키를 두지 말 것)
