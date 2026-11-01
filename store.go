@@ -586,6 +586,8 @@ type TokenRequest struct {
 	ValidHours int    `json:"valid_hours"` // link: 필수, apikey: 0 = 만료 없음
 	MaxUses    int    `json:"max_uses"`    // link 전용
 	MaxDays    int    `json:"max_days"`
+	// validFor 는 서비스 계정 교환이 쓰는 분 단위 만료다(관리 API 로는 받지 않는다). 있으면 ValidHours 대신 쓴다.
+	validFor time.Duration
 }
 
 // CreateToken 은 원문을 한 번만 돌려준다.
@@ -621,7 +623,11 @@ func (s *Store) CreateToken(req TokenRequest, createdBy string, globalMaxDays in
 	default:
 		return nil, "", invalid("kind 는 link 또는 apikey 입니다")
 	}
-	if req.ValidHours > 0 {
+	switch {
+	case req.validFor > 0:
+		exp := now.Add(req.validFor)
+		t.ExpiresAt = &exp
+	case req.ValidHours > 0:
 		exp := now.Add(time.Duration(req.ValidHours) * time.Hour)
 		t.ExpiresAt = &exp
 	}

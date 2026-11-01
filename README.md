@@ -56,6 +56,31 @@ POST /api/v1/uploads/<id>/<key>/complete            보관함 열림(기간은 �
 
 관리자·업로드 링크도 같은 API 를 `/admin/api`, `/u/<token>/api` 아래에서 씁니다(브라우저 쓰기 요청은 `X-Drop: 1` 헤더 필요 — CSRF 방어).
 
+## 클러스터 안 서비스 계정 → 단기 API 키
+
+클러스터 안 서비스는 비밀을 따로 나눠 받지 않고, 파드의 projected ServiceAccount 토큰(audience `drop`)을 단기 API 키로 바꿔 씁니다. drop 은 TokenReview 로 확인하고 `SA_ALLOW` 에 있는 계정에만 내줍니다(지금: `homelab-k3s-mcp/homelab-k3s-mcp`, `session-platform/session-mcp`).
+
+```
+POST http://drop-external.drop.svc.cluster.local/api/v1/sa/token
+Authorization: Bearer <projected SA 토큰, audience drop>
+{"valid_minutes": 60, "max_days": 30, "label": "..."}      ← 전부 선택(기본 60분, 1~1440)
+→ 201 {"token":"drk_…","expires_at":"…","max_days":30,"created_by":"sa:<ns>/<name>","base_url":"https://drop.llkm.nl"}
+```
+
+- 401: 토큰이 없거나 audience 가 다름(기본 apiserver 토큰은 받지 않음) / 403: 허용 목록 밖 / 503: 교환 미설정.
+- 받은 키는 「서비스 계정 API」와 똑같이 씁니다. 키가 만료되면 다시 교환합니다.
+- 이 경로는 공개 주소(`drop.llkm.nl`)에서는 막혀 있고 클러스터 안 이름으로만 닿습니다. 클러스터 안 이름은 Traefik 을 거치므로 잠든 파드도 Sablier 가 깨웁니다(첫 요청 최대 ~20초 — 클라이언트 타임아웃 45초 이상).
+- 받기 목록을 JSON 으로: `curl -u 아이디:비번 -H 'Accept: application/json' …/get/<아이디>` → `{"id","files":[{"name","size"}],"bytes","expires_at"}`.
+- 파드 설정 예(호출자 쪽):
+
+```yaml
+volumes:
+  - name: drop-token
+    projected:
+      sources:
+        - serviceAccountToken: {audience: drop, expirationSeconds: 3600, path: token}
+```
+
 ## 라우팅 경계 (중요)
 
 `/admin*` 은 **반드시** forward-auth 라우트로만 들어와야 합니다. 앱은 `Remote-User` 헤더를 믿고, Traefik 공개 라우트는 이 헤더를 지웁니다(`flux-cd-apps/apps/drop/ingress-route.yaml`). 경로를 추가할 때 두 쪽을 같이 고치세요.

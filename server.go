@@ -39,6 +39,8 @@ type Server struct {
 	tmpl    *template.Template
 	mux     *http.ServeMux
 	now     func() time.Time
+	// reviewer 는 SA_ALLOW 가 있고 파드 안일 때만 있다. 없으면 서비스 계정 교환은 503.
+	reviewer TokenReviewer
 }
 
 type Principal struct {
@@ -74,6 +76,11 @@ func NewServer(cfg Config, st *Store) (*Server, error) {
 		ipLimit: NewLimiter(30, 15*time.Minute),
 		mux:     http.NewServeMux(),
 		now:     time.Now,
+	}
+	if len(cfg.SAAllow) > 0 {
+		if s.reviewer, err = newInClusterReviewer(); err != nil {
+			return nil, err
+		}
 	}
 	s.routes()
 	return s, nil
@@ -116,6 +123,10 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/v1/drops", s.withAuth(s.apiPrincipal, false, s.apiSimpleUpload))
 	m.HandleFunc("GET /api/v1/drops", s.withAuth(s.apiPrincipal, false, s.apiListOwn))
 	m.HandleFunc("DELETE /api/v1/drops/{id}", s.withAuth(s.apiPrincipal, false, s.apiDeleteOwn))
+
+	// 클러스터 안 서비스 계정 → 단기 API 키. 공개 라우트에서는 Traefik 이 이 경로를 막는다
+	// (flux-cd-apps/apps/drop) — 클러스터 안 이름(drop-external)으로만 닿는다.
+	m.HandleFunc("POST /api/v1/sa/token", s.saExchange)
 
 	// 관리자
 	m.HandleFunc("GET /admin", s.adminPage)
@@ -631,6 +642,13 @@ func (s *Server) getDrop(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// 스크립트·도구용: 파일 목록만 JSON 으로(내용은 /f/{n} 으로 따로 받는다).
+	if strings.Contains(r.Header.Get("Accept"), "application/json") {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id": d.ID, "files": d.Files, "bytes": d.TotalSize(), "expires_at": d.ExpiresAt,
+		})
+		return
+	}
 	s.page(w, http.StatusOK, "files.html", map[string]any{"Title": d.ID, "Drop": d})
 }
 
@@ -717,7 +735,12 @@ func dropView(d *Drop, base string) DropView {
 	}
 }
 
+// baseURL 은 사용자에게 보여줄 주소다. 클러스터 안에서 내부 이름으로 들어온 요청에도 공개 주소를
+// 돌려주도록 PUBLIC_BASE_URL 이 있으면 그것을 쓴다.
 func (s *Server) baseURL(r *http.Request) string {
+	if s.cfg.PublicBaseURL != "" {
+		return s.cfg.PublicBaseURL
+	}
 	scheme := "http"
 	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
 		scheme = "https"

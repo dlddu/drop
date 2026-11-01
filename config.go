@@ -25,6 +25,11 @@ type Config struct {
 	ChunkBytes    int64    // 브라우저 업로더가 쓰는 조각 크기(Traefik readTimeout 60s 안에 끝나야 한다)
 	MaxChunkBytes int64    // 조각 하나의 서버 측 상한
 	AdminGroups   []string // 비어 있으면 Authelia 로 로그인한 누구나 관리자
+
+	// 클러스터 안 서비스 계정 → 단기 API 키 교환(POST /api/v1/sa/token).
+	SAAllow       []string // 허용할 "<namespace>/<serviceaccount>". 비어 있으면 교환 비활성
+	SAAudience    string   // projected 토큰의 audience
+	PublicBaseURL string   // 교환 응답에 담는 공개 주소(클러스터 안 요청의 Host 는 내부 이름이다)
 }
 
 func LoadConfig() (Config, error) {
@@ -38,6 +43,8 @@ func LoadConfig() (Config, error) {
 		DefaultDays:   7,
 		ChunkBytes:    16 * MiB,
 		MaxChunkBytes: 64 * MiB,
+		SAAudience:    env("SA_TOKEN_AUDIENCE", "drop"),
+		PublicBaseURL: strings.TrimRight(os.Getenv("PUBLIC_BASE_URL"), "/"),
 	}
 	var err error
 	if c.MaxFileBytes, err = envBytes("MAX_FILE_BYTES", c.MaxFileBytes); err != nil {
@@ -65,6 +72,15 @@ func LoadConfig() (Config, error) {
 		if g = strings.TrimSpace(g); g != "" {
 			c.AdminGroups = append(c.AdminGroups, g)
 		}
+	}
+	for _, sa := range strings.Split(os.Getenv("SA_ALLOW"), ",") {
+		if sa = strings.TrimSpace(sa); sa == "" {
+			continue
+		}
+		if ns, name, ok := strings.Cut(sa, "/"); !ok || ns == "" || name == "" || strings.Contains(name, "/") {
+			return c, fmt.Errorf("SA_ALLOW: %q is not <namespace>/<serviceaccount>", sa)
+		}
+		c.SAAllow = append(c.SAAllow, sa)
 	}
 	switch {
 	case c.MaxDays < 1:
