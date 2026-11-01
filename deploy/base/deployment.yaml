@@ -38,8 +38,9 @@ spec:
             # 프리뷰 네임스페이스는 일부러 넣지 않는다(교환 403 — 실패로 닫힘).
             - name: SA_ALLOW
               value: homelab-k3s-mcp/homelab-k3s-mcp,session-platform/session-mcp
-            - name: PUBLIC_BASE_URL
-              value: https://drop.llkm.nl
+            # PUBLIC_BASE_URL(응답에 담는 공개 주소)은 여기 두지 않는다 — 도메인은 클러스터 사정이라
+            # flux-cd-apps/cluster/drop.yaml 이 https://drop.<공개 도메인> 으로 치환해 넣는다.
+            # 비어 있으면 요청의 Host 로 만든다(공개 주소로 들어온 요청은 그대로 맞다).
           ports:
             - name: http
               containerPort: 8080
